@@ -230,7 +230,7 @@ def get_targets():
     curl --insecure --user admin:admin -X GET https://192.168.122.69:5000/api/targets
     """
 
-    return jsonify({'targets': config.config['targets'].keys()}), 200
+    return jsonify({'targets': list(config.config['targets'].keys())}), 200
 
 
 @app.route('/api/target/<target_iqn>', methods=['PUT', 'DELETE'])
@@ -580,6 +580,7 @@ def gateway(target_iqn=None, gateway_name=None):
            default: FALSE
     :param skipchecks: (bool) whether to skip OS/software versions checks
            default: FALSE
+    :param force: (bool) if True will force removal of gateway.
     **RESTRICTED**
     Examples:
     curl --insecure --user admin:admin -d ip_address=192.168.122.69
@@ -657,10 +658,21 @@ def gateway(target_iqn=None, gateway_name=None):
     if first_gateway:
         gateways = ['localhost']
     elif request.method == 'DELETE':
-        # Update the deleted gw first, so the other gws see the updated
-        # portal list
         gateways.remove(gateway_name)
-        gateways.insert(0, gateway_name)
+
+        if gateway_name != this_host() and request.form.get('force', 'false').lower() == 'true':
+            # The gw we want to delete is down and the user has decided to
+            # force the deletion, so we do the config modification locally
+            # then only tell the other gws to update their state.
+            try:
+                ceph_gw = CephiSCSIGateway(logger, config, gateway_name)
+                ceph_gw.remove_from_config(target_iqn)
+            except CephiSCSIError as err:
+                return jsonify(message="Could not update config: {}.".format(err)), 400
+        else:
+            # Update the deleted gw first, so the other gws see the updated
+            # portal list
+            gateways.insert(0, gateway_name)
     else:
         # Update the new gw first, so other gws see the updated gateways list.
         gateways.insert(0, gateway_name)
@@ -950,7 +962,7 @@ def get_disks():
         disk_names = config.config['disks']
         response = {"disks": disk_names}
     else:
-        disk_names = config.config['disks'].keys()
+        disk_names = list(config.config['disks'].keys())
         response = {"disks": disk_names}
 
     return jsonify(response), 200
@@ -1815,7 +1827,7 @@ def get_clients(target_iqn=None):
         return jsonify(message=err_str), 500
 
     target_config = config.config['targets'][target_iqn]
-    client_list = target_config['clients'].keys()
+    client_list = list(target_config['clients'].keys())
     response = {"clients": client_list}
 
     return jsonify(response), 200
@@ -2319,7 +2331,7 @@ def hostgroups(target_iqn=None):
 
     target_config = config.config['targets'][target_iqn]
     if request.method == 'GET':
-        return jsonify({"groups": target_config['groups'].keys()}), 200
+        return jsonify({"groups": list(target_config['groups'].keys())}), 200
 
 
 @app.route('/api/hostgroup/<target_iqn>/<group_name>', methods=['GET', 'PUT', 'DELETE'])
@@ -2724,7 +2736,8 @@ def pre_reqs_errors():
     valid_dists = {
         "rhel": 7.4,
         "suse": 15.1,
-        "debian": 10}
+        "debian": 10,
+        "ubuntu": 19.04}
 
     errors_found = []
 
